@@ -3,3 +3,7 @@ from .profile import profile_bp
 from .message import message_bp
 from .news import news_bp
 from .system import system_bp
+from .auth import auth_bp
+from .posts import posts_bp
+from .social import social_bp
+from .search import search_bp
