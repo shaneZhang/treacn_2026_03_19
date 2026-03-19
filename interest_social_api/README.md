@@ -1,432 +1,158 @@
-# 兴趣社交APP API 接口文档
+# 兴趣社交 API
 
-## 基础信息
+基于 Flask 框架开发的兴趣社交应用后端接口服务。
 
-- **服务地址**: `http://127.0.0.1:5000`
-- **数据格式**: JSON
-- **编码格式**: UTF-8
+## 技术栈
+- Flask 3.0.0
+- SQLite 数据库 (Flask-SQLAlchemy)
+- JWT 认证 (Flask-JWT-Extended)
+- bcrypt 密码加密
 
-## 通用响应结构
+## 功能模块
 
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": { }
-}
-```
+| 模块 | 功能说明 |
+|------|----------|
+| **用户认证** | 注册、登录、Token验证、登出、密码加密 |
+| **帖子功能** | 发布、删除、点赞、评论、图片上传 |
+| **社交互动** | 关注、取关、黑名单 |
+| **搜索发现** | 用户搜索、帖子搜索、话题搜索 |
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| code | int | 状态码，200表示成功 |
-| message | string | 提示信息 |
-| data | object | 响应数据 |
+## 快速开始
 
----
-
-## 接口列表
-
-### 1. 首页数据接口
-
-**请求路径**: `GET /api/home`
-
-**接口说明**: 获取APP首页的推荐内容，包括轮播图、热门话题、推荐用户、推荐帖子等
-
-**请求参数**: 无
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| banners | array | 轮播图列表 |
-| hot_topics | array | 热门话题列表 |
-| recommended_users | array | 推荐用户列表 |
-| recommended_posts | array | 推荐帖子列表 |
-| interest_categories | array | 兴趣分类列表 |
-
-**banners 数组元素结构**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | int | 轮播图ID |
-| title | string | 标题 |
-| image | string | 图片URL |
-| link | string | 跳转链接 |
-| link_type | string | 链接类型(event/h5/activity) |
-
-**hot_topics 数组元素结构**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | int | 话题ID |
-| name | string | 话题名称 |
-| posts_count | int | 帖子数量 |
-| trend | string | 趋势(up/down/stable) |
-
----
-
-### 2. 我的（用户中心）
-
-**请求路径**: `GET /api/profile`
-
-**接口说明**: 获取当前登录用户的基本信息和统计数据
-
-**请求参数**: 无
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| user | object | 用户基本信息 |
-| stats | object | 用户统计数据 |
-
-**user 对象结构**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | int | 用户ID |
-| username | string | 用户名 |
-| nickname | string | 昵称 |
-| avatar | string | 头像URL |
-| bio | string | 个人简介 |
-| gender | int | 性别(0未知/1男/2女) |
-| birthday | string | 生日 |
-| location | string | 位置 |
-| followers_count | int | 粉丝数 |
-| following_count | int | 关注数 |
-| posts_count | int | 帖子数 |
-| likes_count | int | 获赞数 |
-| is_verified | bool | 是否认证 |
-| verified_type | string | 认证类型 |
-| created_at | string | 注册时间 |
-
----
-
-### 3. 我的帖子
-
-**请求路径**: `GET /api/profile/posts`
-
-**接口说明**: 获取当前用户发布的所有帖子
-
-**请求参数**: 无
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| posts | array | 帖子列表 |
-| total | int | 总数 |
-| page | int | 当前页码 |
-| page_size | int | 每页数量 |
-
----
-
-### 4. 粉丝列表
-
-**请求路径**: `GET /api/profile/followers`
-
-**接口说明**: 获取当前用户的粉丝列表
-
-**请求参数**: 无
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| followers | array | 粉丝列表 |
-| total | int | 总数 |
-| has_more | bool | 是否还有更多 |
-
----
-
-### 5. 关注列表
-
-**请求路径**: `GET /api/profile/following`
-
-**接口说明**: 获取当前用户关注的用户列表
-
-**请求参数**: 无
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| following | array | 关注列表 |
-| total | int | 总数 |
-| has_more | bool | 是否还有更多 |
-
----
-
-### 6. 点赞列表
-
-**请求路径**: `GET /api/profile/liked`
-
-**接口说明**: 获取当前用户点赞过的帖子列表
-
-**请求参数**: 无
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| posts | array | 帖子列表 |
-| total | int | 总数 |
-| page | int | 当前页码 |
-| page_size | int | 每页数量 |
-
----
-
-### 7. 通知列表
-
-**请求路径**: `GET /api/messages/notifications`
-
-**接口说明**: 获取当前用户收到的所有通知，包括点赞、评论、关注、系统通知等
-
-**请求参数**: 无
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| notifications | array | 通知列表 |
-| unread_count | int | 未读数量 |
-| total | int | 总数 |
-
-**notifications 数组元素结构**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | int | 通知ID |
-| type | string | 通知类型(like/comment/follow/system) |
-| user_id | int | 触发用户ID |
-| user_nickname | string | 触发用户昵称 |
-| user_avatar | string | 触发用户头像 |
-| content | string | 通知内容 |
-| post_id | int | 相关帖子ID |
-| is_read | bool | 是否已读 |
-| created_at | string | 创建时间 |
-
----
-
-### 8. 会话列表
-
-**请求路径**: `GET /api/messages/conversations`
-
-**接口说明**: 获取当前用户的所有私信会话列表
-
-**请求参数**: 无
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| conversations | array | 会话列表 |
-| total | int | 总数 |
-| total_unread | int | 总未读数 |
-
-**conversations 数组元素结构**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| conversation_id | int | 会话ID |
-| user_id | int | 对方用户ID |
-| nickname | string | 对方昵称 |
-| avatar | string | 对方头像 |
-| last_message | string | 最后一条消息 |
-| last_message_time | string | 最后消息时间 |
-| unread_count | int | 未读数量 |
-| is_online | bool | 是否在线 |
-
----
-
-### 9. 私信详情
-
-**请求路径**: `GET /api/messages/private/<user_id>`
-
-**接口说明**: 获取与指定用户的私信聊天记录
-
-**路径参数**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| user_id | int | 是 | 对方用户ID |
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| messages | array | 消息列表 |
-| total | int | 消息总数 |
-
-**messages 数组元素结构**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | int | 消息ID |
-| from_user_id | int | 发送者ID |
-| from_user_nickname | string | 发送者昵称 |
-| from_user_avatar | string | 发送者头像 |
-| to_user_id | int | 接收者ID |
-| content | string | 消息内容 |
-| is_read | bool | 是否已读 |
-| created_at | string | 发送时间 |
-
----
-
-### 10. 发送私信
-
-**请求路径**: `POST /api/messages/send`
-
-**接口说明**: 向指定用户发送私信
-
-**请求头**: `Content-Type: application/json`
-
-**请求体**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| to_user_id | int | 是 | 接收者用户ID |
-| content | string | 是 | 消息内容 |
-
-**请求示例**:
-
-```json
-{
-  "to_user_id": 2001,
-  "content": "你好！很高兴认识你"
-}
-```
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| message | object | 发送成功的消息对象 |
-
----
-
-### 11. 检查已读状态
-
-**请求路径**: `GET /api/messages/check-read/<user_id>`
-
-**接口说明**: 检查指定用户发送给当前用户的消息是否已读
-
-**路径参数**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| user_id | int | 是 | 对方用户ID |
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| user_id | int | 用户ID |
-| has_unread | bool | 是否有未读消息 |
-| unread_count | int | 未读消息数量 |
-
----
-
-### 12. 新闻列表
-
-**请求路径**: `GET /api/news`
-
-**接口说明**: 获取新闻列表，支持分页
-
-**请求参数**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| page | int | 否 | 页码，默认1 |
-| page_size | int | 否 | 每页数量，默认10 |
-| type | string | 否 | 新闻类型，默认all |
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| news | array | 新闻列表 |
-| total | int | 总数 |
-| page | int | 当前页码 |
-| page_size | int | 每页数量 |
-| has_more | bool | 是否还有更多 |
-
-**news 数组元素结构**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | int | 新闻ID |
-| title | string | 标题 |
-| summary | string | 摘要 |
-| image | string | 图片URL |
-| source | string | 来源 |
-| publish_time | string | 发布时间 |
-| views_count | int | 阅读量 |
-| comments_count | int | 评论数 |
-| is_hot | bool | 是否热门 |
-
----
-
-### 13. 新闻详情
-
-**请求路径**: `GET /api/news/<news_id>`
-
-**接口说明**: 获取单条新闻的详细内容
-
-**路径参数**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| news_id | int | 是 | 新闻ID |
-
-**响应数据**: 返回单条新闻对象，结构同上
-
----
-
-### 14. 检查更新
-
-**请求路径**: `GET /api/system/check-update`
-
-**接口说明**: 检查APP是否有新版本可用
-
-**请求参数**:
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| version | string | 否 | 当前版本号 |
-
-**响应数据**:
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| has_update | bool | 是否有更新 |
-| latest_version | string | 最新版本号 |
-| min_supported_version | string | 最低支持版本 |
-| update_content | string | 更新内容 |
-| download_url | string | 下载链接 |
-| force_update | bool | 是否强制更新 |
-| release_date | string | 发布日期 |
-
----
-
-## 状态码说明
-
-| 状态码 | 说明 |
-|--------|------|
-| 200 | 成功 |
-| 400 | 请求参数错误 |
-| 401 | 未授权 |
-| 404 | 资源不存在 |
-| 500 | 服务器内部错误 |
-
----
-
-## 启动项目
-
+### 1. 安装依赖
 ```bash
 cd interest_social_api
 pip install -r requirements.txt
-python run.py
 ```
 
-服务启动后访问 `http://127.0.0.1:5000` 查看所有接口列表。
+### 2. 启动服务
+```bash
+python run.py
+```
+服务启动后访问: http://localhost:5001
+
+### 3. 运行测试
+```bash
+python test_api.py
+```
+
+## API 接口列表
+
+### 认证接口
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | /api/auth/register | 用户注册 | 否 |
+| POST | /api/auth/login | 用户登录 | 否 |
+| POST | /api/auth/refresh | 刷新Token | 是 |
+| POST | /api/auth/logout | 用户登出 | 是 |
+| GET | /api/auth/me | 获取用户信息 | 是 |
+| POST | /api/auth/change-password | 修改密码 | 是 |
+
+### 帖子接口
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| GET | /api/posts | 获取帖子列表 | 否 |
+| POST | /api/posts | 发布帖子 | 是 |
+| GET | /api/posts/<post_id> | 获取帖子详情 | 否 |
+| DELETE | /api/posts/<post_id> | 删除帖子 | 是 |
+| POST | /api/posts/<post_id>/like | 点赞/取消点赞 | 是 |
+| GET | /api/posts/<post_id>/comments | 获取评论列表 | 否 |
+| POST | /api/posts/<post_id>/comments | 发布评论 | 是 |
+| POST | /api/posts/upload-image | 图片上传 | 是 |
+
+### 社交接口
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | /api/social/follow/<user_id> | 关注用户 | 是 |
+| POST | /api/social/unfollow/<user_id> | 取消关注 | 是 |
+| POST | /api/social/block/<user_id> | 拉黑用户 | 是 |
+| POST | /api/social/unblock/<user_id> | 取消拉黑 | 是 |
+| GET | /api/social/blocklist | 获取黑名单 | 是 |
+
+### 搜索接口
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| GET | /api/search/users | 搜索用户 | 否 |
+| GET | /api/search/posts | 搜索帖子 | 否 |
+| GET | /api/search/topics | 搜索话题 | 否 |
+| GET | /api/search/hot-topics | 热门话题 | 否 |
+
+## 项目结构
+
+```
+interest_social_api/
+├── app/
+│   ├── __init__.py          # Flask应用初始化
+│   ├── models/
+│   │   └── __init__.py      # 数据库模型
+│   └── routes/
+│       ├── auth.py          # 认证接口
+│       ├── posts.py         # 帖子接口
+│       ├── social.py        # 社交接口
+│       ├── search.py        # 搜索接口
+│       ├── home.py          # 首页接口
+│       ├── profile.py       # 用户主页接口
+│       ├── message.py       # 消息接口
+│       ├── news.py          # 新闻接口
+│       └── system.py        # 系统接口
+├── config/
+│   └── __init__.py          # 配置文件
+├── uploads/                 # 上传文件目录
+├── app.db                   # SQLite数据库文件
+├── requirements.txt         # 依赖列表
+├── run.py                   # 应用入口
+├── test_api.py              # API测试脚本
+└── UNIT_TESTS.md            # 单元测试文档
+```
+
+## 请求示例
+
+### 用户注册
+```bash
+curl -X POST http://localhost:5001/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "testuser",
+    "email": "test@example.com",
+    "password": "123456",
+    "nickname": "测试用户"
+  }'
+```
+
+### 用户登录
+```bash
+curl -X POST http://localhost:5001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "testuser",
+    "password": "123456"
+  }'
+```
+
+### 发布帖子
+```bash
+curl -X POST http://localhost:5001/api/posts \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{
+    "content": "今天天气真好！",
+    "topic": "#美好生活#",
+    "location": "北京市"
+  }'
+```
+
+## 注意事项
+
+1. **生产环境部署**
+   - 请修改 `JWT_SECRET_KEY` 为安全密钥
+   - 关闭 `DEBUG` 模式
+   - 生产环境建议使用 PostgreSQL 或 MySQL 替代 SQLite
+
+2. **上传文件限制**
+   - 支持的图片格式: png, jpg, jpeg, gif
+   - 最大文件大小: 16MB
+
+3. **安全提示**
+   - Token过期时间默认为1小时
+   - 密码使用bcrypt加密存储
+   - 生产环境请使用HTTPS
