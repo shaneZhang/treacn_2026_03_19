@@ -1,0 +1,542 @@
+# =============================================================================
+# Interest Social API - Production Grade CI/CD Pipeline
+# GitHub Actions workflow with comprehensive security and deployment
+# =============================================================================
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop, 'release/*']
+    tags: ['v*']
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+  pull_request:
+    branches: [main, develop]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+  schedule:
+    # Run security scans daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  PYTHON_VERSION: '3.11'
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -----------------------------------------------------------------------------
+  # Job: Code Quality Check
+  # -----------------------------------------------------------------------------
+  lint:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8==7.0.0 black==24.2.0 isort==5.13.2 mypy==1.8.0
+          pip install -r requirements.txt
+
+      - name: Run Black formatting check
+        run: black --check --diff --line-length 100 .
+
+      - name: Run isort import sorting check
+        run: isort --check-only --diff --profile black .
+
+      - name: Run Flake8 linting (critical errors)
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --max-line-length=100
+
+      - name: Run Flake8 linting (warnings)
+        run: flake8 . --count --exit-zero --max-complexity=10 --max-line-length=100 --statistics
+
+      - name: Run MyPy type checking
+        run: mypy app --ignore-missing-imports --show-error-codes || true
+
+  # -----------------------------------------------------------------------------
+  # Job: Security Scan
+  # -----------------------------------------------------------------------------
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install security tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install bandit==1.7.8 safety==3.0.1 pip-audit==0.7.1
+          pip install -r requirements.txt
+
+      - name: Run Bandit security linter
+        run: bandit -r . -x ./tests,./.git,./venv -ll -ii -f json -o bandit-report.json || true
+
+      - name: Run Bandit (fail on high severity)
+        run: bandit -r . -x ./tests,./.git,./venv -ll
+
+      - name: Run Safety dependency check
+        run: safety check --full-report --json --output safety-report.json || true
+
+      - name: Run pip-audit
+        run: pip-audit --format=json --output=pip-audit-report.json || true
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            safety-report.json
+            pip-audit-report.json
+          retention-days: 30
+
+      - name: Run Trivy vulnerability scanner (filesystem)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-fs-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-fs-results.sarif'
+          category: 'trivy-fs'
+
+      - name: Run Checkov IaC scanner
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: dockerfile,docker-compose
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          soft_fail: true
+
+      - name: Upload Checkov results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
+          category: 'checkov'
+
+  # -----------------------------------------------------------------------------
+  # Job: Run Tests
+  # -----------------------------------------------------------------------------
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint, security-scan]
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: testdb
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest==8.1.0 pytest-cov==4.1.0 pytest-mock==3.12.0 pytest-asyncio==0.23.5
+          pip install -r requirements.txt
+
+      - name: Run tests with coverage
+        env:
+          APP_ENV: testing
+          DATABASE_URL: postgresql://testuser:testpassword@localhost:5432/testdb
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET_KEY: test-secret-key-for-ci-only
+          APP_SECRET_KEY: test-app-secret-key
+        run: |
+          pytest --cov=app --cov-report=xml --cov-report=html --cov-fail-under=70 -v --tb=short
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            htmlcov/
+            coverage.xml
+            pytest-report.xml
+          retention-days: 14
+
+  # -----------------------------------------------------------------------------
+  # Job: Build Docker Image
+  # -----------------------------------------------------------------------------
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [test]
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+          driver-opts: image=moby/buildkit:master
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=Interest Social API
+            org.opencontainers.image.description=Production-grade Flask API
+            org.opencontainers.image.vendor=Company Name
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          target: production
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+            APP_VERSION=${{ github.ref_name }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+          platforms: linux/amd64,linux/arm64
+
+      - name: Run Trivy vulnerability scanner (image)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-image-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Upload Trivy image scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-image-results.sarif'
+          category: 'trivy-image'
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        if: github.event_name != 'pull_request'
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 90
+
+  # -----------------------------------------------------------------------------
+  # Job: Integration Tests
+  # -----------------------------------------------------------------------------
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build]
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Compose
+        run: |
+          docker compose version
+
+      - name: Create environment file
+        run: |
+          cat > .env << EOF
+          APP_ENV=production
+          APP_SECRET_KEY=${{ secrets.APP_SECRET_KEY }}
+          JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
+          ENCRYPTION_KEY=${{ secrets.ENCRYPTION_KEY }}
+          SECURITY_PASSWORD_SALT=${{ secrets.SECURITY_PASSWORD_SALT }}
+          CORS_ORIGINS=https://staging.yourdomain.com
+          EOF
+
+      - name: Start services
+        run: |
+          docker compose -f docker-compose.yml up -d --build
+          sleep 30
+
+      - name: Wait for services to be healthy
+        run: |
+          docker compose ps
+          docker compose exec -T api curl -fsS http://localhost:5000/health || exit 1
+
+      - name: Run integration tests
+        run: |
+          docker compose exec -T api python -m pytest tests/integration -v || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose down -v
+
+  # -----------------------------------------------------------------------------
+  # Job: Deploy to Staging
+  # -----------------------------------------------------------------------------
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [build, integration-test]
+    if: github.ref == 'refs/heads/develop'
+    environment:
+      name: staging
+      url: https://staging-api.yourdomain.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STAGING_SSH_KEY }}
+
+      - name: Deploy to staging server
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        run: |
+          ssh -o StrictHostKeyChecking=no $STAGING_USER@$STAGING_HOST << 'EOF'
+            cd /opt/interest-social-api
+            git pull origin develop
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker system prune -f
+            sleep 10
+            curl -fsS http://localhost:5000/health || exit 1
+          EOF
+
+      - name: Notify deployment success
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": "✅ Staging deployment successful",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Staging Deployment Successful*\nCommit: ${{ github.sha }}\nAuthor: ${{ github.actor }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # -----------------------------------------------------------------------------
+  # Job: Deploy to Production
+  # -----------------------------------------------------------------------------
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build, integration-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: production
+      url: https://api.yourdomain.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PRODUCTION_SSH_KEY }}
+
+      - name: Deploy to production (blue-green)
+        env:
+          PRODUCTION_HOST: ${{ secrets.PRODUCTION_HOST }}
+          PRODUCTION_USER: ${{ secrets.PRODUCTION_USER }}
+        run: |
+          ssh -o StrictHostKeyChecking=no $PRODUCTION_USER@$PRODUCTION_HOST << 'EOF'
+            cd /opt/interest-social-api
+            
+            # Determine which environment is currently active
+            if docker compose -f docker-compose.yml -f docker-compose.blue.yml ps | grep -q "Up"; then
+              ACTIVE="blue"
+              TARGET="green"
+            else
+              ACTIVE="green"
+              TARGET="blue"
+            fi
+            
+            echo "Current active: $ACTIVE, deploying to: $TARGET"
+            
+            # Deploy to target environment
+            export COMPOSE_FILE=docker-compose.yml:docker-compose.$TARGET.yml
+            docker compose pull
+            docker compose up -d --remove-orphans
+            
+            # Health check
+            sleep 30
+            if curl -fsS http://localhost:5000/health; then
+              # Switch traffic
+              docker compose -f docker-compose.yml -f docker-compose.proxy.yml up -d
+              echo "Switched to $TARGET"
+            else
+              echo "Health check failed, rolling back"
+              docker compose -f docker-compose.yml -f docker-compose.$TARGET.yml down
+              exit 1
+            fi
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+          files: |
+            sbom.spdx.json
+
+      - name: Notify deployment success
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": "🚀 Production deployment successful",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Production Deployment Successful*\nVersion: ${{ github.ref_name }}\nCommit: ${{ github.sha }}\nAuthor: ${{ github.actor }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # -----------------------------------------------------------------------------
+  # Job: Cleanup
+  # -----------------------------------------------------------------------------
+  cleanup:
+    name: Cleanup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [deploy-staging, deploy-production]
+    if: always()
+    steps:
+      - name: Cleanup old packages
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: interest-social-api
+          package-type: container
+          min-versions-to-keep: 10
+          delete-only-untagged-versions: true
