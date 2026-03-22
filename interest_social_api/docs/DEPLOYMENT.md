@@ -1,461 +1,501 @@
-# Interest Social API - 部署文档
+# Interest Social API - Production Deployment Guide
 
-## 目录
-
-1. [环境要求](#环境要求)
-2. [快速开始](#快速开始)
-3. [生产环境部署](#生产环境部署)
-4. [配置说明](#配置说明)
-5. [监控与日志](#监控与日志)
-6. [备份与恢复](#备份与恢复)
-7. [故障排查](#故障排查)
-
----
-
-## 环境要求
-
-### 系统要求
-
-- **操作系统**: Linux (Ubuntu 20.04+ / CentOS 8+) / macOS 12+
-- **CPU**: 最低 2 核，推荐 4 核以上
-- **内存**: 最低 4GB，推荐 8GB 以上
-- **磁盘**: 最低 20GB 可用空间
-
-### 软件依赖
-
-| 软件 | 版本要求 | 说明 |
-|------|---------|------|
-| Docker | 24.0+ | 容器运行时 |
-| Docker Compose | 2.20+ | 容器编排工具 |
-| Git | 2.30+ | 版本控制 |
-
-### 端口要求
-
-| 端口 | 服务 | 说明 |
-|------|------|------|
-| 80 | Nginx | HTTP 入口 |
-| 443 | Nginx | HTTPS 入口 |
-| 5000 | API | 应用服务 |
-| 5432 | PostgreSQL | 数据库 |
-| 6379 | Redis | 缓存服务 |
+## Table of Contents
+1. [Prerequisites](#prerequisites)
+2. [Security Setup](#security-setup)
+3. [Deployment Steps](#deployment-steps)
+4. [Configuration](#configuration)
+5. [Monitoring](#monitoring)
+6. [Troubleshooting](#troubleshooting)
+7. [Maintenance](#maintenance)
 
 ---
 
-## 快速开始
+## Prerequisites
 
-### 1. 克隆项目
+### System Requirements
+- Docker Engine 24.0+
+- Docker Compose 2.20+
+- 4GB RAM minimum (8GB recommended)
+- 20GB disk space
+- Linux/macOS/Windows with WSL2
 
+### Required Tools
 ```bash
-git clone <repository-url>
-cd interest_social_api
-```
+# Install Docker
+curl -fsSL https://get.docker.com | sh
 
-### 2. 配置环境变量
+# Install Docker Compose
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
 
-```bash
-cp .env.example .env
-```
-
-编辑 `.env` 文件，设置必要的配置：
-
-```bash
-# 应用配置
-APP_ENV=production
-APP_SECRET_KEY=<生成一个安全的密钥>
-APP_DEBUG=False
-
-# JWT配置
-JWT_SECRET_KEY=<生成一个安全的JWT密钥>
-JWT_ALGORITHM=HS256
-JWT_ACCESS_TOKEN_EXPIRES=3600
-JWT_REFRESH_TOKEN_EXPIRES=2592000
-
-# 数据库配置
-DB_PASSWORD=<数据库密码>
-
-# Redis配置
-REDIS_PASSWORD=<Redis密码>
-
-# CORS配置
-CORS_ORIGINS=https://yourdomain.com
-```
-
-### 3. 生成密钥
-
-```bash
-# 生成 APP_SECRET_KEY
-openssl rand -hex 32
-
-# 生成 JWT_SECRET_KEY
-openssl rand -hex 32
-```
-
-### 4. 启动服务
-
-```bash
-# 构建并启动所有服务
-docker-compose up -d
-
-# 查看服务状态
-docker-compose ps
-
-# 查看日志
-docker-compose logs -f api
-```
-
-### 5. 验证部署
-
-```bash
-# 健康检查
-curl http://localhost:5000/health
-
-# 就绪检查
-curl http://localhost:5000/ready
-
-# API 根路径
-curl http://localhost:5000/
+# Verify installations
+docker --version
+docker-compose --version
 ```
 
 ---
 
-## 生产环境部署
+## Security Setup
 
-### 1. SSL/TLS 证书配置
+### 1. Generate Secure Secrets
 
-将 SSL 证书放置在 `nginx/ssl/` 目录：
-
-```
-nginx/ssl/
-├── cert.pem    # SSL 证书
-└── key.pem     # 私钥文件
-```
-
-**使用 Let's Encrypt 获取免费证书：**
-
-```bash
-# 安装 certbot
-apt-get install certbot
-
-# 获取证书
-certbot certonly --standalone -d api.yourdomain.com
-
-# 复制证书
-cp /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem nginx/ssl/cert.pem
-cp /etc/letsencrypt/live/api.yourdomain.com/privkey.pem nginx/ssl/key.pem
-```
-
-### 2. 数据库初始化
-
-首次部署时，数据库会自动初始化。如需手动初始化：
-
-```bash
-# 进入 PostgreSQL 容器
-docker-compose exec postgres psql -U appuser -d interest_social
-
-# 执行初始化脚本
-\i /docker-entrypoint-initdb.d/01-init.sql
-```
-
-### 3. 生产环境配置
-
-创建 `docker-compose.prod.yml`：
-
-```yaml
-version: '3.8'
-
-services:
-  api:
-    image: ghcr.io/your-org/interest-social-api:${VERSION:-latest}
-    restart: always
-    environment:
-      - APP_ENV=production
-    deploy:
-      replicas: 3
-      resources:
-        limits:
-          cpus: '2'
-          memory: 1G
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-```
-
-启动生产环境：
-
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-```
-
-### 4. 水平扩展
-
-```bash
-# 扩展 API 服务到 3 个实例
-docker-compose up -d --scale api=3
-```
-
-### 5. 滚动更新
-
-```bash
-# 拉取最新镜像
-docker-compose pull api
-
-# 重新创建容器（零停机）
-docker-compose up -d --no-deps --build api
-```
-
----
-
-## 配置说明
-
-### 环境变量详解
-
-| 变量名 | 必填 | 默认值 | 说明 |
-|--------|------|--------|------|
-| APP_ENV | 是 | development | 运行环境 |
-| APP_SECRET_KEY | 是 | - | 应用密钥 |
-| APP_DEBUG | 否 | False | 调试模式 |
-| JWT_SECRET_KEY | 是 | - | JWT 签名密钥 |
-| JWT_ALGORITHM | 否 | HS256 | JWT 加密算法 |
-| JWT_ACCESS_TOKEN_EXPIRES | 否 | 3600 | 访问令牌有效期(秒) |
-| JWT_REFRESH_TOKEN_EXPIRES | 否 | 2592000 | 刷新令牌有效期(秒) |
-| DATABASE_URL | 是 | - | 数据库连接字符串 |
-| REDIS_URL | 否 | redis://localhost:6379/0 | Redis 连接字符串 |
-| LOG_LEVEL | 否 | INFO | 日志级别 |
-| CORS_ORIGINS | 否 | * | 允许的跨域来源 |
-| RATE_LIMIT_PER_MINUTE | 否 | 60 | 每分钟请求限制 |
-
-### Gunicorn 配置
-
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| GUNICORN_WORKERS | CPU核心数*2+1 | Worker 进程数 |
-| GUNICORN_THREADS | 2 | 每个 Worker 的线程数 |
-| GUNICORN_TIMEOUT | 120 | 请求超时时间(秒) |
-| GUNICORN_MAX_REQUESTS | 1000 | 重启前处理的最大请求数 |
-
----
-
-## 监控与日志
-
-### 日志配置
-
-日志输出到标准输出，可通过 Docker 日志查看：
-
-```bash
-# 查看所有服务日志
-docker-compose logs
-
-# 实时查看 API 日志
-docker-compose logs -f api
-
-# 查看最近 100 行日志
-docker-compose logs --tail=100 api
-```
-
-### 健康检查端点
-
-| 端点 | 用途 | 响应示例 |
-|------|------|----------|
-| /health | 存活探针 | `{"status": "healthy"}` |
-| /ready | 就绪探针 | `{"status": "ready"}` |
-
-### Prometheus 指标
-
-可集成 Prometheus 进行监控，建议监控指标：
-
-- HTTP 请求延迟 (P50, P95, P99)
-- HTTP 请求错误率
-- 容器 CPU/内存使用率
-- 数据库连接池状态
-- Redis 连接状态
-
----
-
-## 备份与恢复
-
-### 数据库备份
-
-```bash
-# 创建备份
-docker-compose exec postgres pg_dump -U appuser interest_social > backup_$(date +%Y%m%d).sql
-
-# 恢复备份
-cat backup_20240315.sql | docker-compose exec -T postgres psql -U appuser interest_social
-```
-
-### 自动备份脚本
+Create a script to generate all required secrets:
 
 ```bash
 #!/bin/bash
-BACKUP_DIR="/backups"
-DATE=$(date +%Y%m%d_%H%M%S)
-docker-compose exec -T postgres pg_dump -U appuser interest_social > "$BACKUP_DIR/db_$DATE.sql"
-find "$BACKUP_DIR" -name "db_*.sql" -mtime +7 -delete
+# generate-secrets.sh
+
+echo "Generating secure secrets..."
+
+# Generate JWT secret (32+ characters)
+export JWT_SECRET_KEY=$(openssl rand -base64 48)
+
+# Generate app secret
+export APP_SECRET_KEY=$(openssl rand -base64 48)
+
+# Generate database password
+export DB_PASSWORD=$(openssl rand -base64 32)
+
+# Generate Redis password
+export REDIS_PASSWORD=$(openssl rand -base64 32)
+
+# Generate Fernet encryption key
+export ENCRYPTION_KEY=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+
+# Generate password salt
+export SECURITY_PASSWORD_SALT=$(openssl rand -hex 16)
+
+# Generate AES keys
+export AES_MASTER_KEY=$(openssl rand -base64 32)
+export AES_SALT=$(openssl rand -hex 16)
+
+# Output to .env file
+cat > .env << EOF
+# Auto-generated secrets - $(date -u +%Y-%m-%dT%H:%M:%SZ)
+APP_ENV=production
+APP_SECRET_KEY=$APP_SECRET_KEY
+JWT_SECRET_KEY=$JWT_SECRET_KEY
+DB_PASSWORD=$DB_PASSWORD
+REDIS_PASSWORD=$REDIS_PASSWORD
+ENCRYPTION_KEY=$ENCRYPTION_KEY
+SECURITY_PASSWORD_SALT=$SECURITY_PASSWORD_SALT
+AES_MASTER_KEY=$AES_MASTER_KEY
+AES_SALT=$AES_SALT
+EOF
+
+echo "Secrets generated and saved to .env"
+echo "IMPORTANT: Keep .env file secure and never commit it to version control!"
+```
+
+Run the script:
+```bash
+chmod +x generate-secrets.sh
+./generate-secrets.sh
+```
+
+### 2. SSL/TLS Certificate Setup
+
+#### Option A: Let's Encrypt (Production)
+```bash
+# Install certbot
+sudo apt-get update
+sudo apt-get install -y certbot
+
+# Generate certificate
+sudo certbot certonly --standalone -d api.yourdomain.com
+
+# Copy certificates
+sudo cp /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem ./nginx/ssl/cert.pem
+sudo cp /etc/letsencrypt/live/api.yourdomain.com/privkey.pem ./nginx/ssl/key.pem
+
+# Set permissions
+sudo chmod 644 ./nginx/ssl/cert.pem
+sudo chmod 600 ./nginx/ssl/key.pem
+```
+
+#### Option B: Self-Signed (Development)
+```bash
+mkdir -p ./nginx/ssl
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout ./nginx/ssl/key.pem \
+  -out ./nginx/ssl/cert.pem \
+  -subj "/C=US/ST=State/L=City/O=Organization/CN=api.yourdomain.com"
+```
+
+### 3. Directory Structure Setup
+
+```bash
+# Create required directories
+mkdir -p logs
+mkdir -p data/postgres
+mkdir -p data/redis
+mkdir -p data/prometheus
+mkdir -p data/grafana
+mkdir -p nginx/logs
+mkdir -p nginx/ssl
+
+# Set permissions
+chmod 755 logs
+chmod 755 data
+chmod 700 data/postgres
+chmod 700 data/redis
 ```
 
 ---
 
-## 故障排查
+## Deployment Steps
 
-### 常见问题
+### 1. Clone and Prepare
 
-#### 1. 容器启动失败
-
-**症状**: 容器反复重启
-
-**排查步骤**:
 ```bash
-# 查看容器日志
-docker-compose logs api
+# Clone repository
+git clone https://github.com/yourorg/interest-social-api.git
+cd interest-social-api
 
-# 查看容器状态
+# Generate secrets
+./generate-secrets.sh
+
+# Create required directories
+mkdir -p logs data/postgres data/redis nginx/ssl
+```
+
+### 2. Build and Deploy
+
+```bash
+# Build images
+docker-compose build
+
+# Start services in detached mode
+docker-compose up -d
+
+# Verify services are running
 docker-compose ps
 
-# 检查容器退出码
-docker inspect interest-social-api | grep -A 5 "State"
+# Check logs
+docker-compose logs -f api
 ```
 
-**常见原因**:
-- 环境变量未配置
-- 端口被占用
-- 依赖服务未就绪
+### 3. Database Initialization
 
-#### 2. 数据库连接失败
-
-**症状**: API 报错 "Connection refused"
-
-**排查步骤**:
 ```bash
-# 检查 PostgreSQL 状态
-docker-compose exec postgres pg_isready -U appuser
+# Run database migrations (if using Alembic)
+docker-compose exec api flask db upgrade
 
-# 测试数据库连接
-docker-compose exec postgres psql -U appuser -d interest_social -c "SELECT 1"
-
-# 检查网络连通性
-docker-compose exec api ping postgres
+# Or run init script
+docker-compose exec postgres psql -U appuser -d interest_social -f /docker-entrypoint-initdb.d/01-init.sql
 ```
 
-**解决方案**:
-- 确认数据库容器已启动
-- 检查 DATABASE_URL 配置
-- 确认数据库用户权限
+### 4. Health Check
 
-#### 3. Redis 连接失败
-
-**症状**: 缓存功能不可用
-
-**排查步骤**:
 ```bash
-# 检查 Redis 状态
+# Check API health
+curl -f http://localhost:5000/health
+
+# Check all services
+docker-compose ps
+
+# View logs
+docker-compose logs --tail=100
+```
+
+---
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `APP_ENV` | Environment (development/staging/production) | Yes | production |
+| `APP_SECRET_KEY` | Application secret key | Yes | - |
+| `JWT_SECRET_KEY` | JWT signing key | Yes | - |
+| `DB_PASSWORD` | Database password | Yes | - |
+| `REDIS_PASSWORD` | Redis password | Yes | - |
+| `ENCRYPTION_KEY` | Data encryption key | Yes | - |
+| `CORS_ORIGINS` | Allowed CORS origins | Yes | - |
+
+### Docker Compose Profiles
+
+```bash
+# Basic deployment (API + DB + Redis + Nginx)
+docker-compose up -d
+
+# With monitoring (adds Prometheus + Grafana)
+docker-compose --profile monitoring up -d
+
+# Development mode (with hot reload)
+docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+### Scaling
+
+```bash
+# Scale API workers
+docker-compose up -d --scale api=3
+
+# Note: Requires load balancer configuration
+```
+
+---
+
+## Monitoring
+
+### 1. Health Endpoints
+
+- `GET /health` - Application health
+- `GET /ready` - Readiness probe
+- `GET /metrics` - Prometheus metrics (if enabled)
+
+### 2. Log Aggregation
+
+```bash
+# View all logs
+docker-compose logs -f
+
+# View specific service
+docker-compose logs -f api
+
+# View last 100 lines
+docker-compose logs --tail=100 api
+```
+
+### 3. Monitoring Stack (Optional)
+
+Access monitoring tools:
+- Grafana: http://localhost:3000 (admin/admin)
+- Prometheus: http://localhost:9090
+
+### 4. Alerting Setup
+
+Configure alerts in `monitoring/alertmanager.yml`:
+
+```yaml
+groups:
+  - name: api-alerts
+    rules:
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate detected"
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+#### 1. Container Fails to Start
+
+```bash
+# Check container status
+docker-compose ps
+
+# View container logs
+docker-compose logs <service-name>
+
+# Check for port conflicts
+sudo netstat -tulpn | grep 5000
+
+# Restart specific service
+docker-compose restart api
+```
+
+#### 2. Database Connection Issues
+
+```bash
+# Test database connection
+docker-compose exec api python -c "
+import psycopg2
+conn = psycopg2.connect('$DATABASE_URL')
+print('Connection successful')
+conn.close()
+"
+
+# Check PostgreSQL logs
+docker-compose logs postgres
+
+# Verify database exists
+docker-compose exec postgres psql -U appuser -l
+```
+
+#### 3. Redis Connection Issues
+
+```bash
+# Test Redis connection
 docker-compose exec redis redis-cli ping
 
-# 检查 Redis 连接
-docker-compose exec api curl redis:6379
+# Check Redis logs
+docker-compose logs redis
+
+# Verify Redis authentication
+docker-compose exec redis redis-cli -a $REDIS_PASSWORD ping
 ```
 
-#### 4. JWT 认证失败
+#### 4. SSL/TLS Issues
 
-**症状**: 返回 401 Unauthorized
-
-**排查步骤**:
 ```bash
-# 检查 JWT 配置
-docker-compose exec api env | grep JWT
+# Verify certificate
+docker-compose exec nginx openssl x509 -in /etc/nginx/ssl/cert.pem -text -noout
 
-# 验证 Token 格式
-curl -H "Authorization: Bearer <token>" http://localhost:5000/api/auth/me
+# Check certificate expiration
+docker-compose exec nginx openssl x509 -in /etc/nginx/ssl/cert.pem -noout -dates
+
+# Test SSL connection
+curl -v https://localhost/health --insecure
 ```
 
-**常见原因**:
-- Token 过期
-- JWT_SECRET_KEY 配置错误
-- Token 格式不正确
+#### 5. High Memory Usage
 
-#### 5. 性能问题
-
-**症状**: 响应缓慢
-
-**排查步骤**:
 ```bash
-# 检查资源使用
+# Check container resource usage
 docker stats
 
-# 检查进程状态
-docker-compose exec api ps aux
+# View memory usage by process
+docker-compose exec api ps aux --sort=-%mem
 
-# 查看慢查询日志
-docker-compose exec postgres psql -c "SELECT * FROM pg_stat_activity"
+# Restart if needed
+docker-compose restart api
 ```
 
-**优化建议**:
-- 增加 Gunicorn workers
-- 优化数据库查询
-- 启用 Redis 缓存
-- 增加容器资源限制
+#### 6. Rate Limiting Issues
 
-#### 6. SSL 证书问题
-
-**症状**: HTTPS 无法访问
-
-**排查步骤**:
 ```bash
-# 检查证书文件
-ls -la nginx/ssl/
+# Check Redis for rate limit keys
+docker-compose exec redis redis-cli keys "rate_limit:*"
 
-# 验证证书
-openssl x509 -in nginx/ssl/cert.pem -text -noout
-
-# 测试 SSL 连接
-openssl s_client -connect localhost:443
+# Clear rate limit (emergency only)
+docker-compose exec redis redis-cli flushdb
 ```
 
-### 日志分析
-
-#### 错误日志级别
-
-| 级别 | 说明 | 处理优先级 |
-|------|------|-----------|
-| CRITICAL | 系统崩溃 | 立即处理 |
-| ERROR | 功能异常 | 尽快处理 |
-| WARNING | 潜在问题 | 计划处理 |
-| INFO | 正常信息 | 无需处理 |
-
-#### 常见错误码
-
-| 错误码 | 说明 | 解决方案 |
-|--------|------|----------|
-| 400 | 请求参数错误 | 检查请求格式 |
-| 401 | 认证失败 | 检查 Token |
-| 403 | 权限不足 | 检查用户权限 |
-| 404 | 资源不存在 | 检查 URL |
-| 429 | 请求过于频繁 | 降低请求频率 |
-| 500 | 服务器内部错误 | 查看日志排查 |
-
-### 紧急恢复
+### Debug Mode
 
 ```bash
-# 重启所有服务
-docker-compose restart
+# Enable debug logging
+export LOG_LEVEL=DEBUG
+docker-compose up -d
 
-# 重建服务
-docker-compose up -d --force-recreate
+# Access container shell
+docker-compose exec api /bin/sh
 
-# 回滚到上一版本
-docker-compose down
-docker tag interest-social-api:latest interest-social-api:backup
+# Run Python shell
+docker-compose exec api python
+
+# Check environment variables
+docker-compose exec api env | grep -E "(APP_|JWT_|DB_|REDIS_)"
+```
+
+---
+
+## Maintenance
+
+### Regular Tasks
+
+#### Daily
+```bash
+# Check service health
+curl -f http://localhost:5000/health
+
+# Check disk space
+df -h
+
+# Review error logs
+docker-compose logs --tail=100 api | grep ERROR
+```
+
+#### Weekly
+```bash
+# Update images
+docker-compose pull
+docker-compose up -d
+
+# Clean up unused resources
+docker system prune -f
+
+# Backup database
+docker-compose exec postgres pg_dump -U appuser interest_social > backup_$(date +%Y%m%d).sql
+```
+
+#### Monthly
+```bash
+# Rotate logs
+docker-compose exec api logrotate -f /etc/logrotate.conf
+
+# Update SSL certificates (if using Let's Encrypt)
+sudo certbot renew
+
+# Security updates
+sudo apt-get update && sudo apt-get upgrade -y
+```
+
+### Backup and Recovery
+
+#### Database Backup
+```bash
+# Automated backup script
+#!/bin/bash
+BACKUP_DIR="/backups/postgres"
+DATE=$(date +%Y%m%d_%H%M%S)
+mkdir -p $BACKUP_DIR
+
+docker-compose exec -T postgres pg_dump \
+  -U appuser \
+  -d interest_social \
+  | gzip > $BACKUP_DIR/backup_$DATE.sql.gz
+
+# Keep only last 7 days
+find $BACKUP_DIR -name "backup_*.sql.gz" -mtime +7 -delete
+```
+
+#### Database Restore
+```bash
+# Restore from backup
+gunzip < backup_20240101_120000.sql.gz | \
+  docker-compose exec -T postgres psql -U appuser -d interest_social
+```
+
+### Security Updates
+
+```bash
+# Update base images
+docker-compose build --no-cache
+
+# Scan for vulnerabilities
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  aquasec/trivy image interest-social-api:latest
+
+# Apply updates
 docker-compose up -d
 ```
 
 ---
 
-## 联系支持
+## Production Checklist
 
-如遇到无法解决的问题，请提供以下信息：
+Before going live, verify:
 
-1. 错误日志 (`docker-compose logs api`)
-2. 环境变量配置（脱敏后）
-3. 复现步骤
-4. 容器状态 (`docker-compose ps`)
+- [ ] All secrets are generated and stored securely
+- [ ] SSL certificates are valid and not expired
+- [ ] Database backups are configured
+- [ ] Monitoring and alerting are set up
+- [ ] Rate limiting is enabled
+- [ ] Security headers are configured
+- [ ] CORS origins are properly restricted
+- [ ] Log rotation is configured
+- [ ] Health checks are responding correctly
+- [ ] CI/CD pipeline is tested
+- [ ] Rollback procedure is documented
+- [ ] On-call rotation is established
+
+---
+
+## Support
+
+For issues and support:
+- GitHub Issues: https://github.com/yourorg/interest-social-api/issues
+- Documentation: https://docs.yourdomain.com
+- Email: sre@yourdomain.com
