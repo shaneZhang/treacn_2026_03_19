@@ -1,0 +1,130 @@
+version: '3.8'
+
+# 自定义网络
+networks:
+  app_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+# 数据卷
+volumes:
+  app_logs:
+  app_tmp:
+
+services:
+  # API应用服务
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: interest-social-api:latest
+    container_name: interest-social-api
+    restart: unless-stopped
+    networks:
+      - app_network
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - APP_NAME=InterestSocialAPI
+      - LOG_LEVEL=INFO
+    volumes:
+      - app_logs:/app/logs
+      - app_tmp:/app/tmp
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # 安全配置
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run
+    user: appuser
+
+  # Nginx反向代理服务（生产环境使用）
+  nginx:
+    image: nginx:alpine
+    container_name: interest-social-nginx
+    restart: unless-stopped
+    networks:
+      - app_network
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/ssl:/etc/nginx/ssl
+    depends_on:
+      - api
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    # 安全配置
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /var/run
+      - /var/cache/nginx
+    user: nginx
+
+  # 开发环境专用配置
+  api-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: interest-social-api:dev
+    container_name: interest-social-api-dev
+    restart: unless-stopped
+    networks:
+      - app_network
+    ports:
+      - "5001:5000"
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    volumes:
+      - .:/app
+    # 开发环境启用热重载
+    command: flask run --host=0.0.0.0 --port=5000 --reload
+    profiles:
+      - dev
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G

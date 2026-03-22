@@ -1,0 +1,260 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ created ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/interest-social-api
+
+jobs:
+  # 代码检查和测试
+  test:
+    name: Test and Lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8 pytest pytest-cov requests
+
+      - name: Lint with flake8
+        run: |
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Security check with bandit
+        run: |
+          pip install bandit
+          bandit -r app/ -f json -o bandit-report.json || true
+          cat bandit-report.json
+
+      - name: Start application for testing
+        run: |
+          cd $GITHUB_WORKSPACE
+          python -c "from app import create_app; app = create_app(); print('App initialized successfully')"
+
+      - name: Run security tests
+        run: |
+          cd $GITHUB_WORKSPACE
+          cat > test_basic.py << 'EOF'
+          import unittest
+          from app import create_app
+          from app.utils.security import (
+              sanitize_input, detect_sql_injection,
+              hash_password, verify_password,
+              encrypt_sensitive_data, decrypt_sensitive_data
+          )
+
+          class TestSecurity(unittest.TestCase):
+              def setUp(self):
+                  self.app = create_app()
+                  self.client = self.app.test_client()
+
+              def test_xss_protection(self):
+                  malicious_input = '<script>alert("xss")</script>'
+                  sanitized = sanitize_input(malicious_input)
+                  self.assertNotIn('<script>', sanitized)
+                  self.assertIn('&lt;script&gt;', sanitized)
+
+              def test_sql_injection_detection(self):
+                  malicious_input = "admin' OR '1'='1"
+                  self.assertTrue(detect_sql_injection(malicious_input))
+                  safe_input = "normal_username"
+                  self.assertFalse(detect_sql_injection(safe_input))
+
+              def test_password_hashing(self):
+                  password = "test_password_123"
+                  hashed = hash_password(password)
+                  self.assertTrue(verify_password(hashed, password))
+                  self.assertFalse(verify_password(hashed, "wrong_password"))
+
+              def test_encryption_decryption(self):
+                  sensitive_data = "my_secret_data"
+                  encrypted = encrypt_sensitive_data(sensitive_data)
+                  decrypted = decrypt_sensitive_data(encrypted)
+                  self.assertEqual(decrypted, sensitive_data)
+
+              def test_login_endpoint(self):
+                  response = self.client.post('/api/auth/login', 
+                      json={'username': 'user1', 'password': 'password123'})
+                  self.assertEqual(response.status_code, 200)
+                  data = response.get_json()
+                  self.assertIn('access_token', data['data'])
+
+              def test_protected_route_without_token(self):
+                  response = self.client.get('/api/home')
+                  self.assertEqual(response.status_code, 401)
+
+              def test_security_headers(self):
+                  response = self.client.get('/')
+                  self.assertIn('X-Frame-Options', response.headers)
+                  self.assertIn('X-XSS-Protection', response.headers)
+                  self.assertIn('X-Content-Type-Options', response.headers)
+
+          if __name__ == '__main__':
+              unittest.main(verbosity=2)
+          EOF
+          python -m pytest test_basic.py -v
+
+  # 构建Docker镜像
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # 安全扫描
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # 部署到生产环境
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, security-scan]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to server
+        run: |
+          echo "Deploying to production environment..."
+          echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}"
+          # 这里可以添加实际的部署命令，例如通过SSH部署到服务器
+          # ssh user@server "docker pull $IMAGE && docker-compose up -d"
+
+  # 发布时创建部署文档
+  create-release-docs:
+    name: Create Release Documentation
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate deployment docs
+        run: |
+          cat > DEPLOYMENT.md << 'EOF'
+          # 部署文档 - ${{ github.event.release.tag_name }}
+          
+          ## 版本信息
+          - 版本: ${{ github.event.release.tag_name }}
+          - 发布日期: $(date -Iseconds)
+          - Docker镜像: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}
+          
+          ## 部署步骤
+          1. 拉取最新镜像:
+             \`\`\`bash
+             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }}
+             \`\`\`
+          
+          2. 更新docker-compose.yml中的镜像标签
+          
+          3. 启动服务:
+             \`\`\`bash
+             docker-compose up -d
+             \`\`\`
+          
+          4. 验证服务状态:
+             \`\`\`bash
+             docker-compose ps
+             curl http://localhost:5000/health
+             \`\`\`
+          
+          ## 回滚步骤
+          如遇问题，可回滚到上一个版本:
+          \`\`\`bash
+          docker-compose down
+          # 修改镜像标签为上一个稳定版本
+          docker-compose up -d
+          \`\`\`
+          EOF
+          
+          cat DEPLOYMENT.md
+
+      - name: Upload documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-docs
+          path: DEPLOYMENT.md
