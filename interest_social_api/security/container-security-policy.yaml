@@ -1,0 +1,67 @@
+version: "2"
+checks:
+  - name: "No root user"
+    severity: "critical"
+    description: "Container should not run as root user"
+    check:
+      type: "dockerfile"
+      pattern: "USER"
+      required: true
+
+  - name: "No privileged containers"
+    severity: "critical"
+    description: "Container should not run with privileged flag"
+    check:
+      type: "docker-compose"
+      pattern: "privileged"
+      required: false
+      negate: true
+
+  - name: "Read-only root filesystem"
+    severity: "high"
+    description: "Container should have read-only root filesystem"
+    check:
+      type: "docker-compose"
+      pattern: "read_only"
+      required: false
+
+  - name: "Drop all capabilities"
+    severity: "high"
+    description: "Container should drop all Linux capabilities"
+    check:
+      type: "docker-compose"
+      pattern: "cap_drop.*ALL"
+      required: true
+
+  - name: "No new privileges"
+    severity: "high"
+    description: "Container should prevent privilege escalation"
+    check:
+      type: "docker-compose"
+      pattern: "no-new-privileges"
+      required: true
+
+  - name: "Resource limits defined"
+    severity: "medium"
+    description: "Container should have resource limits defined"
+    check:
+      type: "docker-compose"
+      pattern: "deploy.*resources"
+      required: true
+
+  - name: "Health check defined"
+    severity: "medium"
+    description: "Container should have health check defined"
+    check:
+      type: "dockerfile"
+      pattern: "HEALTHCHECK"
+      required: true
+
+  - name: "Specific tag used"
+    severity: "medium"
+    description: "Container images should use specific tags, not :latest"
+    check:
+      type: "docker-compose"
+      pattern: "image.*:latest"
+      required: false
+      negate: true
